@@ -60,6 +60,9 @@ def visualize(img_path, img, proc_param, joints, verts, cam):
     rend_img_vp2 = renderer.rotated(
         vert_shifted, -60, cam=cam_for_render, img_size=img.shape[:2])
 
+    import matplotlib
+    matplotlib.use('Agg')
+
     import matplotlib.pyplot as plt
     # plt.ion()
     plt.figure(1)
@@ -130,11 +133,7 @@ def main(img_path, json_path=None):
 
     joints, verts, cams, joints3d, theta = model.predict(
         input_img, get_theta=True)
-
-#     print('JOINTS 3D:')
-#     print(joints3d.shape)
-#     print(joints3d)
-
+    
     joints_names = ['Ankle.R_x', 'Ankle.R_y', 'Ankle.R_z',
                    'Knee.R_x', 'Knee.R_y', 'Knee.R_z',
                    'Hip.R_x', 'Hip.R_y', 'Hip.R_z',
@@ -176,15 +175,15 @@ def main(img_path, json_path=None):
     
     joints_export.to_csv("hmr/output/csv/"+os.path.splitext(os.path.basename(img_path))[0]+".csv")
     
-#     pose = pd.DataFrame(theta[:, 3:75])
+#    pose = pd.DataFrame(theta[:, 3:75])
     
-#     pose.to_csv("hmr/output/theta_test.csv", header=None, index=None)
+#    pose.to_csv("hmr/output/theta_test.csv", header=None, index=None)
     
-#     print('THETA:', pose.shape, pose)
+#    print('THETA:', pose.shape, pose)
     
-#     import cv2
-#     rotations = [cv2.Rodrigues(aa)[0] for aa in pose.reshape(-1, 3)]
-#     print('ROTATIONS:', rotations)
+#    import cv2
+#    rotations = [cv2.Rodrigues(aa)[0] for aa in pose.reshape(-1, 3)]
+#    print('ROTATIONS:', rotations)
     
     visualize(img_path, img, proc_param, joints[0], verts[0], cams[0])
 

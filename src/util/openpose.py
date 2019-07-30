@@ -10,7 +10,7 @@ def read_json(json_path):
         data = json.load(f)
     kps = []
     for people in data['people']:
-        kp = np.array(people['pose_keypoints']).reshape(-1, 3)
+        kp = np.array(people['pose_keypoints_2d']).reshape(-1, 3)
         kps.append(kp)
     return kps
 
@@ -33,3 +33,31 @@ def get_bbox(json_path, vis_thr=0.2):
     scale = 150. / person_height
 
     return scale, center
+
+# TODO return multiple scales, centers
+def get_multiple_bbox(json_path, n = 1, vis_thr=0.2):
+    kps = read_json(json_path)
+    # Pick top n detections.
+    scores = np.array([np.mean(kp[kp[:, 2] > vis_thr, 2]) for kp in kps])
+    kp = [kps[s] for s in scores.argsort()[-n:][::-1]]
+    
+    scales = list()
+    centers = list()
+
+    for i in range(n):
+        vis = kp[i][:,2] > vis_thr
+        vis_kp = kp[i][vis, :2]
+        min_pt = np.min(vis_kp, axis=0)
+        max_pt = np.max(vis_kp, axis=0)
+        person_height = np.linalg.norm(max_pt - min_pt)
+        if person_height == 0:
+            print('bad!')
+            import ipdb; ipdb.set_trace()
+            ipdb.set_trace()
+        center = (min_pt + max_pt) / 2.
+        scale = 150. / person_height
+        
+        centers.append(center)
+        scales.append(scale)
+
+    return scales, centers

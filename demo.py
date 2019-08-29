@@ -1,20 +1,10 @@
 """
-Demo of HMR.
+deal with multiple people
+images with openpose output
 
-Note that HMR requires the bounding box of the person in the image. The best performance is obtained when max length of the person in the image is roughly 150px. 
-
-When only the image path is supplied, it assumes that the image is centered on a person whose length is roughly 150px.
-Alternatively, you can supply output of the openpose to figure out the bbox and the right scale factor.
-
-Sample usage:
-
-# On images on a tightly cropped image around the person
-python -m demo --img_path data/im1963.jpg
-python -m demo --img_path data/coco1.png
-
-# On images, with openpose output
-python -m demo --img_path data/random.jpg --json_path data/random_keypoints.json
 """
+
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -36,105 +26,80 @@ import pandas as pd
 import os
 import glob
 
+import cv2
+
 flags.DEFINE_string('img_path', 'data/im1963.jpg', 'Image to run')
 flags.DEFINE_string(
     'json_path', None,
     'If specified, uses the openpose output to crop the image.')
+flags.DEFINE_integer('num_people', None, 
+    'Number of people in the image.')
 
 
-def visualize(img_path, img, proc_param, joints, verts, cam):
-    """
-    Renders the result in original image coordinate frame.
-    """
-    cam_for_render, vert_shifted, joints_orig = vis_util.get_original(
-        proc_param, verts, cam, joints, img_size=img.shape[:2])
+def calibration(proc_params):
+    img_size = proc_params['img_size']
+    undo_scale = 1. / np.array(proc_params['scale'])
+    principal_pt = np.array([img_size, img_size]) / 2.
+    start_pt = proc_params['start_pt'] - 0.5 * img_size
+    final_principal_pt = (principal_pt + start_pt) * undo_scale
+    pp = final_principal_pt
 
-    # Render results
-    skel_img = vis_util.draw_skeleton(img, joints_orig)
-    rend_img_overlay = renderer(
-        vert_shifted, cam=cam_for_render, img=img, do_alpha=True)
-    rend_img = renderer(
-        vert_shifted, cam=cam_for_render, img_size=img.shape[:2])
-    rend_img_vp1 = renderer.rotated(
-        vert_shifted, 60, cam=cam_for_render, img_size=img.shape[:2])
-    rend_img_vp2 = renderer.rotated(
-        vert_shifted, -60, cam=cam_for_render, img_size=img.shape[:2])
-
-    import matplotlib
-    matplotlib.use('Agg')
-
-    import matplotlib.pyplot as plt
-    # plt.ion()
-    plt.figure(1)
-    plt.clf()
-    plt.subplot(231)
-    plt.imshow(img)
-    plt.title('input')
-    plt.axis('off')
-    plt.subplot(232)
-    plt.imshow(skel_img)
-    plt.title('joint projection')
-    plt.axis('off')
-    plt.subplot(233)
-    plt.imshow(rend_img_overlay)
-    plt.title('3D Mesh overlay')
-    plt.axis('off')
-    plt.subplot(234)
-    plt.imshow(rend_img)
-    plt.title('3D mesh')
-    plt.axis('off')
-    plt.subplot(235)
-    plt.imshow(rend_img_vp1)
-    plt.title('diff vp')
-    plt.axis('off')
-    plt.subplot(236)
-    plt.imshow(rend_img_vp2)
-    plt.title('diff vp')
-    plt.axis('off')
-    plt.draw()
-    plt.savefig("hmr/output/images/"+os.path.splitext(os.path.basename(img_path))[0]+".png")
-    # import ipdb
-    # ipdb.set_trace()
+    H = np.loadtxt("homography.csv",delimiter=",")
+    try : 
+        diff = np.loadtxt("diff.csv",delimiter=",")
+    except :
+        cross_point = np.loadtxt("crosspoint.csv",delimiter=",")
+        diff = np.array([pp[0] - cross_point[0],pp[1] - cross_point[1]])
+        np.savetxt("diff.csv",diff,delimiter=",")
+    src = np.array([[pp[0]-diff[0]],[pp[1]-diff[1]],[1]])
+    tar = np.matmul(H,src)[:-1].T
+    return (tar[0][0],tar[0][1])
 
 
-def preprocess_image(img_path, json_path=None):
+
+# TODO get multiple scale and center and get preprocessed
+def preprocess_image(img_path, json_path, n):
     img = io.imread(img_path)
     if img.shape[2] == 4:
         img = img[:, :, :3]
+    
+    scales, centers = op_util.get_multiple_bbox(json_path, n)
+    
+    crops = list()
+    proc_params = list()
 
-    if json_path is None:
-        if np.max(img.shape[:2]) != config.img_size:
-            print('Resizing so the max image size is %d..' % config.img_size)
-            scale = (float(config.img_size) / np.max(img.shape[:2]))
-        else:
-            scale = 1.
-        center = np.round(np.array(img.shape[:2]) / 2).astype(int)
-        # image center in (x,y)
-        center = center[::-1]
-    else:
-        scale, center = op_util.get_bbox(json_path)
+    for i in range(n):
+        crop, proc_param = img_util.scale_and_crop(img, scales[i], centers[i], config.img_size)
+        
+        # Normalize image to [-1, 1]
+        crop = 2 * ((crop / 255.) - 0.5)
 
-    crop, proc_param = img_util.scale_and_crop(img, scale, center,
-                                               config.img_size)
+        crops.append(crop)
+        proc_params.append(proc_param)
+    
+    return crops, proc_params, img
 
-    # Normalize image to [-1, 1]
-    crop = 2 * ((crop / 255.) - 0.5)
-
-    return crop, proc_param, img
-
-
-def main(img_path, json_path=None):
+def main(img_path, json_path, n):
     sess = tf.Session()
     model = RunModel(config, sess=sess)
 
-    input_img, proc_param, img = preprocess_image(img_path, json_path)
-    # Add batch dimension: 1 x D x D x 3
-    input_img = np.expand_dims(input_img, 0)
+    # TODO get multiple cropped images and get estimation for each of them
+    input_imgs, proc_params, img = preprocess_image(img_path, json_path, n)
 
-    joints, verts, cams, joints3d, theta = model.predict(
-        input_img, get_theta=True)
-    
-    joints_names = ['Ankle.R_x', 'Ankle.R_y', 'Ankle.R_z',
+    for i in range(n):
+        input_imgs[i] = np.expand_dims(input_imgs[i], 0)
+
+        joints, verts, cams, joints3d, theta = model.predict(input_imgs[i], get_theta=True)
+
+        x,z = calibration(proc_params[i])
+
+        # center = [0.5*img.shape[1],0.5*img.shape[0]]
+        # x = (x - center[0])*0.01
+        # z = (z - center[1])*0.01
+
+        joints3d[0] += np.array([[x,0,z]]*19)
+
+        joints_names = ['Ankle.R_x', 'Ankle.R_y', 'Ankle.R_z',
                    'Knee.R_x', 'Knee.R_y', 'Knee.R_z',
                    'Hip.R_x', 'Hip.R_y', 'Hip.R_z',
                    'Hip.L_x', 'Hip.L_y', 'Hip.L_z',
@@ -153,62 +118,54 @@ def main(img_path, json_path=None):
                    'Eye.R_x', 'Eye.R_y', 'Eye.R_z', 
                    'Ear.L_x', 'Ear.L_y', 'Ear.L_z', 
                    'Ear.R_x', 'Ear.R_y', 'Ear.R_z']
-    
-    joints_export = pd.DataFrame(joints3d.reshape(1,57), columns=joints_names)
-    joints_export.index.name = 'frame'
-    
-    joints_export.iloc[:, 1::3] = joints_export.iloc[:, 1::3]*-1
-    joints_export.iloc[:, 2::3] = joints_export.iloc[:, 2::3]*-1
+        
+        joints_export = pd.DataFrame(joints3d.reshape(1,57), columns=joints_names)
+        joints_export.index.name = 'frame'
+        
+        joints_export.iloc[:, 1::3] = joints_export.iloc[:, 1::3]*-1
+        joints_export.iloc[:, 2::3] = joints_export.iloc[:, 2::3]*-1
 
-#     col_list = list(joints_export)
-
-#     col_list[1::3], col_list[2::3] = col_list[2::3], col_list[1::3]
-
-#     joints_export = joints_export[col_list]
-    
-    hipCenter = joints_export.loc[:][['Hip.R_x', 'Hip.R_y', 'Hip.R_z',
+        hipCenter = joints_export.loc[:][['Hip.R_x', 'Hip.R_y', 'Hip.R_z',
                                       'Hip.L_x', 'Hip.L_y', 'Hip.L_z']]
 
-    joints_export['hip.Center_x'] = hipCenter.iloc[0][::3].sum()/2
-    joints_export['hip.Center_y'] = hipCenter.iloc[0][1::3].sum()/2
-    joints_export['hip.Center_z'] = hipCenter.iloc[0][2::3].sum()/2
-    
-    joints_export.to_csv("hmr/output/csv/"+os.path.splitext(os.path.basename(img_path))[0]+".csv")
-    
-#    pose = pd.DataFrame(theta[:, 3:75])
-    
-#    pose.to_csv("hmr/output/theta_test.csv", header=None, index=None)
-    
-#    print('THETA:', pose.shape, pose)
-    
-#    import cv2
-#    rotations = [cv2.Rodrigues(aa)[0] for aa in pose.reshape(-1, 3)]
-#    print('ROTATIONS:', rotations)
-    
-    visualize(img_path, img, proc_param, joints[0], verts[0], cams[0])
+        joints_export['hip.Center_x'] = hipCenter.iloc[0][::3].sum()/2
+        joints_export['hip.Center_y'] = hipCenter.iloc[0][1::3].sum()/2
+        joints_export['hip.Center_z'] = hipCenter.iloc[0][2::3].sum()/2
 
-def join_csv():
+        print("hmr/output/csv/"+os.path.splitext(os.path.basename(img_path))[0]+"_%02d.csv"%i)
+
+        joints_export.to_csv("hmr/output/csv/"+os.path.splitext(os.path.basename(img_path))[0]+"_%02d.csv"%i)
+        
+    
+
+
+def join_csv(n):
   path = 'hmr/output/csv/'                   
-  all_files = glob.glob(os.path.join(path, "*.csv")    )
+  for i in range(n):
+    all_files = glob.glob(os.path.join(path, "*_{:02d}.csv".format(i)))
 
-  df_from_each_file = (pd.read_csv(f) for f in sorted(all_files))
-  concatenated_df   = pd.concat(df_from_each_file, ignore_index=True)
+    df_from_each_file = (pd.read_csv(f) for f in sorted(all_files))
+    concatenated_df   = pd.concat(df_from_each_file, ignore_index=True)
 
-  concatenated_df['frame'] = concatenated_df.index+1
-  concatenated_df.to_csv("hmr/output/csv_joined/csv_joined.csv", index=False)
-    
+    concatenated_df['frame'] = concatenated_df.index+1
+    concatenated_df.to_csv("hmr/output/csv_joined/csv_joined_{:02d}.csv".format(i), index=False)
+
+
 if __name__ == '__main__':
     config = flags.FLAGS
     config(sys.argv)
-    # Using pre-trained model, change this to use your own.
+
+    # Using pre-trained model
     config.load_path = src.config.PRETRAINED_MODEL
 
     config.batch_size = 1
 
     renderer = vis_util.SMPLRenderer(face_path=config.smpl_face_path)
 
-    main(config.img_path, config.json_path)
+    print(config.num_people)
+    main(config.img_path, config.json_path, config.num_people)
     
-    join_csv()
-    
-    print('\nResult is in hmr/output (you can open images in Colaboratory by double-clicking them)')
+
+    join_csv(config.num_people)
+
+    print('\nResult is in hmr/output')

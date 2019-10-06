@@ -35,8 +35,6 @@ flags.DEFINE_integer('num_people', None,
     'Number of people in the image.')
 
 def calibration(proc_params, frameno, i, n):
-    import matplotlib.pyplot as plt
-    
     img_size = proc_params['img_size']
     undo_scale = 1. / np.array(proc_params['scale'])
     principal_pt = np.array([img_size, img_size]) / 2.
@@ -113,10 +111,6 @@ def main(img_path, json_path, n):
 
         x,z,p = calibration(proc_params[i], int(frame), i, n)
 
-        # center = [0.5*img.shape[1],0.5*img.shape[0]]
-        # x = (x - center[0])*0.01
-        # z = (z - center[1])*0.01
-        
         # Rotate
         for k, j in enumerate(joints3d[0]):
             joints3d[0][k] = np.matmul(R, j.T).T
